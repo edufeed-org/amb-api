@@ -1,8 +1,10 @@
-{:deps {org.clojure/clojure {:mvn/version "1.12.0"}
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         com.stuartsierra/component {:mvn/version "1.1.0"}
-        io.pedestal/pedestal.service {:mvn/version "0.7.2"}
+        cheshire/cheshire {:mvn/version "5.13.0"}
         io.pedestal/pedestal.jetty {:mvn/version "0.7.1"}
         org.slf4j/slf4j-simple     {:mvn/version "2.0.10"}
+        luposlip/json-schema {:mvn/version "0.4.6"}
         net.clojars.laoc/nostr {:local/root "/home/laoc/coding/nostr-clj"}}
 
  :aliases
