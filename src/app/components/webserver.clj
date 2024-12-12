@@ -8,32 +8,32 @@
             [json-schema.core :as json-schema]
             [clojure.core.async :refer [go chan >! <!]]))
 
-(defn validate [resources]
-  (let [schema (json-schema/prepare-schema
-                (-> "resources/schema.json"
-                    slurp
-                    (cheshire.core/parse-string true)))]
-    (try
-      (let [validation-results
-            (map (fn [resource]
-                   (try
-                     (when (json-schema/validate schema resource)
-                       {:valid true :resource resource})
-                     (catch Exception e
-                       {:valid false :error e :resource resource})))
-                 resources)]
-        (do
-          ;; Log invalid resources
-          (doseq [{:keys [error resource]} (filter #(not (:valid %)) validation-results)]
-            (println "Invalid resource:" resource "Error:" error))
-          ;; Return only valid resources
-          (->> validation-results
-               (filter :valid)
-               (map :resource))))
-      (catch Exception e
-        (println "Unexpected error during validation" e)
-        []))))
+(def schema (json-schema/prepare-schema
+             (-> "resources/schema.json"
+                 slurp
+                 (cheshire.core/parse-string true))))
 
+(defn validate [resources]
+  (try
+    (let [validation-results
+          (map (fn [resource]
+                 (try
+                   (when (json-schema/validate schema resource)
+                     {:valid true :resource resource})
+                   (catch Exception e
+                     {:valid false :error e :resource resource})))
+               resources)]
+      (do
+          ;; Log invalid resources
+        (doseq [{:keys [error resource]} (filter #(not (:valid %)) validation-results)]
+          #_(println "Invalid resource:" resource "Error:" error))
+          ;; Return only valid resources
+        (->> validation-results
+             (filter :valid)
+             (map :resource))))
+    (catch Exception e
+      #_(println "Unexpected error during validation" e)
+      nil)))
 
 (defn ok [body]
   {:status 200 :body body})
@@ -44,10 +44,11 @@
     (go
       (let [npub (get-in request [:query-params :npub])
             pk (get-in request [:query-params :pk])
+            relay (get-in request [:relay])
             filter (if pk
                      {:kinds [30142] :authors [pk]}
                      {:kinds [30142]})
-            resources (nostr/fetch-events "ws://localhost:7778" filter)
+            resources (nostr/fetch-events relay filter)
             transformed (map #(edufeed/convert-30142-to-nostr-amb % true true) resources)
             validate (validate transformed)
             resp (if validate
@@ -60,34 +61,37 @@
   {:name ::resources-by-user
    :enter (fn [context]
             (go
-              (let [result (<! (get-resources (:request context)))
-                    ;; TODO check against amb schema
-                    ]
+              (let [result (<! (get-resources (:request context)))]
                 (assoc context :response (ok result)))))})
 
-(def routes
+;; Interceptor to add the WebSocket port to the request context
+(defn add-relay [relay]
+  {:name ::add-ws-port
+   :enter (fn [context]
+            (assoc-in context [:request :relay] relay))})
+
+(defn routes
+  [relay]
   (route/expand-routes
-   #{["/resources" :get resources-by-user :route-name :resources]}))
+   #{["/resources" :get [(add-relay relay) resources-by-user] :route-name :resources]}))
 
 (def service-map
   {::http/routes routes
    ::http/type :jetty
    ::http/port 8890})
 
-(defn create-service []
-  (http/create-server service-map))
+(defn create-service [relay]
+  (http/create-server
+   (assoc service-map
+          ::http/routes (routes relay)
+          ::http/port 8890)))
 
-(defn start []
-  (http/start (create-service)))
-
-(comment
-  (http/stop (create-service)))
-
-(defrecord WebServer []
+(defrecord WebServer [relay]
   component/Lifecycle
   (start [this]
-    (println ";; Starting Web server...")
-    (let [server (create-service)]
+    (println ";; Starting Webserver")
+    (println ";; Using Relay: " relay)
+    (let [server (create-service relay)]
       (assoc this :server (http/start server))))
   (stop [this]
     (println ";; Stopping Web server...")
@@ -98,22 +102,3 @@
 (defn new-web-server []
   (map->WebServer {}))
 
-;; For interactive development
-(defonce server (atom nil))
-
-(defn start-dev []
-  (reset! server
-          (http/start (http/create-server
-                       (assoc service-map
-                              ::http/join? false)))))
-
-(defn stop-dev []
-  (http/stop @server))
-
-(defn restart []
-  (stop-dev)
-  (start-dev))
-
-(comment
-  (start-dev)
-  (restart))
